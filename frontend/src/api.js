@@ -80,6 +80,9 @@ export const products = {
   activity(id, page, signal) {
     return request(id + '/activity/', { params: { page }, signal })
   },
+  adjustments(id, variantId, page, signal) {
+    return request(id + '/variants/' + variantId + '/adjustments/', { params: { page }, signal })
+  },
   adjustInventory(id, variantId, body) {
     return request(id + '/variants/' + variantId + '/adjustments/', { method: 'POST', body })
   },

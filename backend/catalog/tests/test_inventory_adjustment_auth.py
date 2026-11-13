@@ -96,14 +96,15 @@ class InventoryAdjustmentAuthorizationTests(InventoryAdjustmentFixtureMixin, Tes
         self.assertIn(response.status_code, (401, 403))
         self.assert_nothing_changed()
 
-    def test_only_post_is_allowed(self):
+    def test_adjustments_cannot_be_edited_or_deleted(self):
         url = reverse(
             "variant-adjustments",
             kwargs={"product_pk": self.product.pk, "variant_pk": self.variant.pk},
         )
         url += f"?merchant_id={self.merchant.pk}"
 
-        for method in ("get", "put", "patch", "delete"):
+        # GET lists history and POST appends; nothing rewrites the audit.
+        for method in ("put", "patch", "delete"):
             with self.subTest(method=method):
                 response = getattr(self.client, method)(
                     url, content_type="application/json"

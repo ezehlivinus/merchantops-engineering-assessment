@@ -235,3 +235,86 @@ class InventoryAdjustmentValidationTests(InventoryAdjustmentFixtureMixin, TestCa
         self.assertEqual(response.status_code, 409)
         self.assertFalse(InventoryAdjustment.objects.exists())
         self.assertFalse(Inventory.objects.filter(variant=variant).exists())
+
+
+class InventoryAdjustmentHistoryTests(InventoryAdjustmentFixtureMixin, TestCase):
+    def history(self, product=None, variant=None, merchant=None, **params):
+        product = product or self.product
+        variant = variant or self.variant
+        merchant = merchant or self.merchant
+        url = reverse(
+            "variant-adjustments",
+            kwargs={"product_pk": product.pk, "variant_pk": variant.pk},
+        )
+        return self.client.get(url, {"merchant_id": merchant.pk, **params})
+
+    def test_lists_adjustments_newest_first(self):
+        self.adjust({"delta": 3, "reason": "First"})
+        self.adjust({"delta": -2, "reason": "Second"})
+
+        response = self.history()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        latest, earliest = response.data["results"]
+        self.assertEqual(latest["reason"], "Second")
+        self.assertEqual(latest["delta"], -2)
+        self.assertEqual(latest["quantity_before"], 23)
+        self.assertEqual(latest["quantity_after"], 21)
+        self.assertEqual(latest["actor"], "stock-operator")
+        self.assertEqual(earliest["reason"], "First")
+
+    def test_only_this_variants_adjustments_are_listed(self):
+        _, sibling = self.create_variant(self.merchant, "STOCK-003")
+        self.adjust({"delta": 1, "reason": "Mine"})
+        InventoryAdjustment.objects.create(
+            variant=sibling,
+            actor=self.user,
+            delta=1,
+            reason="Sibling",
+            quantity_before=20,
+            quantity_after=21,
+        )
+
+        response = self.history()
+
+        self.assertEqual([r["reason"] for r in response.data["results"]], ["Mine"])
+
+    def test_history_is_paginated_with_constant_queries(self):
+        InventoryAdjustment.objects.bulk_create(
+            InventoryAdjustment(
+                variant=self.variant,
+                actor=self.user,
+                delta=1,
+                reason=f"Count {n}",
+                quantity_before=20 + n,
+                quantity_after=21 + n,
+            )
+            for n in range(30)
+        )
+
+        # session, user, merchant, variant, count, page with actors.
+        with self.assertNumQueries(6):
+            response = self.history()
+
+        self.assertEqual(response.data["count"], 30)
+        self.assertEqual(len(response.data["results"]), 25)
+        self.assertEqual(len(self.history(page=2).data["results"]), 5)
+
+    def test_other_merchants_history_is_not_found(self):
+        for kwargs in (
+            {"product": self.other_product, "variant": self.other_variant},
+            {
+                "product": self.other_product,
+                "variant": self.other_variant,
+                "merchant": self.other_merchant,
+            },
+            {"merchant": self.other_merchant},
+        ):
+            with self.subTest(**{k: v.pk for k, v in kwargs.items()}):
+                self.assertEqual(self.history(**kwargs).status_code, 404)
+
+    def test_unauthenticated_history_is_rejected(self):
+        self.client.logout()
+
+        self.assertIn(self.history().status_code, (401, 403))

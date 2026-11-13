@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from catalog.models import (
     AuditLog,
     Availability,
+    InventoryAdjustment,
     Merchant,
     PriceRule,
     Product,
@@ -312,19 +313,39 @@ def get_member_merchant_id(request):
 
 
 class InventoryAdjustmentView(APIView):
+    """GET: a variant's adjustment history. POST: adjust its stock."""
+
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, product_pk, variant_pk):
+    def get_variant(self, request, product_pk, variant_pk):
         merchant_id = get_member_merchant_id(request)
 
         # The variant must belong to this product, and the product to this
         # merchant; anything else is indistinguishable from "not found".
-        variant = get_object_or_404(
+        return get_object_or_404(
             ProductVariant,
             pk=variant_pk,
             product_id=product_pk,
             product__merchant_id=merchant_id,
         )
+
+    def get(self, request, product_pk, variant_pk):
+        variant = self.get_variant(request, product_pk, variant_pk)
+
+        adjustments = (
+            InventoryAdjustment.objects.filter(variant=variant)
+            .select_related("actor")
+            .order_by("-created_at", "-id")
+        )
+
+        paginator = ProductPagination()
+        page = paginator.paginate_queryset(adjustments, request, view=self)
+        return paginator.get_paginated_response(
+            InventoryAdjustmentSerializer(page, many=True).data
+        )
+
+    def post(self, request, product_pk, variant_pk):
+        variant = self.get_variant(request, product_pk, variant_pk)
 
         serializer = InventoryAdjustmentRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

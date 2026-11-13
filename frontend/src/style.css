@@ -374,6 +374,14 @@ textarea { resize: vertical; }
 .adjust-fields .adjust-reason input { width: 100%; }
 .adjust-preview { padding-bottom: 0.55rem; color: var(--muted); }
 
+.row-actions { white-space: nowrap; }
+.row-actions .button + .button { margin-left: 0.5rem; }
+.history { border: 1px solid var(--border); border-radius: 0.6rem; background: white; overflow-x: auto; }
+.history-table th, .history-table td { padding: 0.6rem 1rem; }
+.history-reason { overflow-wrap: anywhere; min-width: 12rem; }
+.history-table td.change-up { color: #146044; font-weight: 600; }
+.history-table td.change-down { color: #a42934; font-weight: 600; }
+
 .activity-table tbody th, .activity-table tbody td { vertical-align: top; }
 .activity-table time { white-space: nowrap; }
 .change-list { min-width: 11rem; }
