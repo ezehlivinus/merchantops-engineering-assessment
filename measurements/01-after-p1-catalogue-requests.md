@@ -18,6 +18,24 @@ The 26 requests were sequential, so in the browser each one also paid a full
 network and proxy round trip before the table could render; the in-process
 timing above understates the real-world gain.
 
+## Browser check
+
+Headless Google Chrome against the running dev stack (Vite on :5173), signed in as
+`demo_operator`, counting requests to `/api/` per action via the DevTools protocol.
+"Before" is the `CatalogueView.vue` from commit `0de517d`, swapped in temporarily.
+
+| Action | API requests before | After | Table ready before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Catalogue first load | 26 (+1)* | 1 | 357 ms | 130 ms |
+| Next page | 26 | 1 | 321 ms | 119 ms |
+| Search "0012" | 26 | 1 | 323 ms | 113 ms |
+
+\* One extra request left over from the page that was loading when the check reloaded it.
+
+Single run on a local machine where browser, proxy and database are all on one host, so
+round trips are under 10 ms each. Over a real network each of the 25 sequential
+requests adds a full round trip, so the gap widens.
+
 ## Unchanged data
 - All single-endpoint body hashes match `00-baseline.md`.
 - The removed loop overwrote `name`, `sku`, `status`, `image_url` with the detail
