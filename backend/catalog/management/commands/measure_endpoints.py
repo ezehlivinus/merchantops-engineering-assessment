@@ -110,14 +110,9 @@ class Command(BaseCommand):
 
     def catalogue_page_load(self):
         """Mirror CatalogueView.vue fetchPage()."""
-        listing = self.get("")
-        responses = [listing]
-
-        # The view requests each product's detail before rendering.
-        for item in listing.json()["results"]:
-            responses.append(self.get(f"{item['id']}/"))
-
-        return responses
+        # Until measurement 01 the view also fetched each row's detail;
+        # see measurements/00-baseline.md for that request sequence.
+        return [self.get("")]
 
     def open_product(self, product_id):
         """Mirror EditorView.vue readEditor()."""
