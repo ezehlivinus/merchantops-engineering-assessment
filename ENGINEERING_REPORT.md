@@ -1,137 +1,109 @@
 # Engineering report
 
-MerchantOps senior full-stack assessment. This report covers what I investigated, what I
-changed and why, how it was measured and verified, and what I would do next. Every number
-below can be reproduced with the commands in [Reproducing the results](#reproducing-the-results).
+MerchantOps senior full-stack assessment. Every number here can be reproduced with the
+commands in [Reproducing the results](#reproducing-the-results); raw output is in
+[`measurements/`](measurements/).
 
 ## Summary
 
-- **Performance:** fixed the three problems on the two screens operators use most. One
-  catalogue page went from **26 HTTP requests and 130 queries to 1 request and 5 queries**.
-  Opening the 50-variant product went from **110 queries to 11**. Every API response is
-  byte-identical to before (checked by SHA-256).
-- **Inventory adjustments:** operators can raise or lower a variant's stock, with a required
-  reason, from the editor's Inventory tab, and see each variant's adjustment history. Every
-  adjustment locks the inventory row, checks the reserved floor, updates stock and writes an
-  append-only audit record in one transaction.
-- **Verification:** 96 backend tests on MySQL, including multi-threaded tests with independent
-  connections. Each guarantee was also checked against the running app (browser and `curl`),
-  and a clean clone was set up from scratch and reproduced both the baseline and the final
-  numbers.
+- **Performance:** a catalogue page went from **26 requests and 130 queries to 1 and 5**;
+  opening the 50-variant product from **110 queries to 11**. Responses are byte-identical.
+- **Inventory adjustments:** operators adjust a variant's stock with a required reason from the
+  editor's Inventory tab and see its history. Each adjustment locks the inventory row, checks
+  the reserved floor, and writes stock and an append-only audit record in one transaction.
+- **Verification:** 96 tests on MySQL, including threads with independent connections, plus
+  checks against the running app and a clean-clone reproduction.
 
 ## 1. Findings and priorities
 
-After a review of the views, serializers and Vue screens, the request sequences the
-frontend actually issues were measured against the seeded dataset (5,000 products,
-10,142 variants, two merchants). Query counts are per request and include 3 fixed queries (session, user,
-merchant membership).
+I reviewed the views, serializers and Vue screens, then measured the request sequences the
+frontend actually issues against the seeded data (5,000 products, 10,142 variants, two
+merchants). Query counts include 3 fixed queries per request (session, user, membership).
 
-| # | Finding | Where | Evidence (before) | Decision |
-| --- | --- | --- | --- | --- |
-| P1 | Catalogue re-fetched every row's detail **one request at a time** before rendering, for four fields the list already returns | `frontend/src/views/CatalogueView.vue` | 26 requests, 130 queries per page load, next page or search | **Fixed** |
-| P2 | List endpoint ran one category query per row (`category.name` in the serializer, no join) | `ProductListView.get_queryset` | 30 queries per page | **Fixed** |
-| P3 | Editor endpoint ran a price query and an inventory query per variant | `ProductEditorView.get` | 106 queries for the 50-variant product | **Fixed** |
-| P4 | Editor screen makes a second request only to get `image_url` | `EditorView.vue` | +1 parallel request (4 queries) | Future work |
-| P5 | Substring search (`LIKE '%term%'`) cannot use an index; `COUNT(*)` repeats the filter | `ProductListView` | ~8 ms at 2,500 products per merchant | Future work |
-| P6 | Activity feed sorts by `created_at` without a composite index | `ProductActivityView` | table empty in seed data | Future work |
-| P7 | OFFSET pagination and `COUNT(*)` on every page | DRF `PageNumberPagination` | last page ~10 ms | Future work |
-| P8 | Detail view joins a category it never serializes | `ProductDetailView` | not measurable | Future work |
+| # | Finding | Evidence (before) | Decision |
+| --- | --- | --- | --- |
+| P1 | `CatalogueView.vue` fetched each row's detail, **one request at a time**, before rendering, for four fields the list already returns | 26 requests, 130 queries per page, next page or search | **Fixed** |
+| P2 | `ProductListView` ran one category query per row (`category.name`, no join) | 30 queries per page | **Fixed** |
+| P3 | `ProductEditorView` ran a price query and an inventory query per variant | 106 queries for 50 variants | **Fixed** |
+| P4 | `EditorView.vue` makes a second request only for `image_url` | +1 parallel request | Next steps |
+| P5 | Search uses `LIKE '%term%'`, which cannot use an index | ~8 ms at 2,500 products | Next steps |
+| P6 | Activity feed sorts without a `(product_id, created_at)` index | table empty in seed data | Next steps |
+| P7 | OFFSET pagination and `COUNT(*)` on every page | last page ~10 ms | Next steps |
+| P8 | `ProductDetailView` joins a category it never uses | not measurable | Next steps |
 
-**Why these three.** They are the only places where work grows with the number of rows on
-screen, they sit on the catalogue and the editor (the screens every workflow passes through),
-and each fix is a few lines that keep responses identical. P1 mattered most: its 25 requests
-were sequential, so in a browser each paid a full network round trip before the table could
-render. The rest are small at this data size, or would change behaviour (a FULLTEXT index
-matches words, not substrings), so they are listed under next steps instead.
+I fixed P1-P3: they are the only places where work grows with rows on screen, they sit on
+the two main screens, and each fix is a few lines with identical responses. P1 mattered most,
+because its 25 requests ran in sequence, each paying a full round trip. The rest are small at
+this size or would change behavior (full-text search matches words, not substrings).
 
 ## 2. Performance evidence
 
-### Method
-
-`backend/catalog/management/commands/measure_endpoints.py` replays read-only API requests
-in-process with Django's test client, signed in as `demo_operator` against the seeded
-database. For each case it does one warm-up and N timed runs, and reports requests, exact
-query count, median and p95 time, response size and a SHA-256 of the body. "Workflow" cases
-replay the exact request sequence a Vue screen issues.
-
-- It was committed **before any optimization** (`0de517d`), so the baseline can be rerun
-  from that commit.
-- The same command, machine and dataset were used for every step. Raw output of every run is
-  in [`measurements/`](measurements/).
-- Query counts and hashes are exact and repeat on every run. Timings vary by about 30%
-  between runs on the same machine, so each file holds two runs.
-- In-process timing excludes network and rendering. For P1, where those dominate, I also
-  counted requests in headless Chrome against the running dev stack.
+**Method.** The `measure_endpoints` command replays API requests in-process (Django test
+client, signed in as `demo_operator`, seeded database): one warm-up, then N timed runs per case,
+reporting requests, exact query count, median and p95 time, and a SHA-256 of each response.
+"Workflow" cases replay what a Vue screen requests. I committed it **before any fix**
+(`0de517d`) and used the same command, machine and data for every step. Query counts and hashes
+repeat exactly; timings vary about 30%, so each file holds two runs. In-process timing leaves
+out the network, which dominates P1, so for P1 I also counted requests in headless Chrome.
 
 Environment: Linux x86_64, 12 cores, Docker 27.2.1, MySQL 8.4.13, Django 5.2.19,
-`DEBUG=True`, Django's default READ COMMITTED isolation.
+`DEBUG=True`, READ COMMITTED (Django's default).
 
-### Results
+| Case | Before: queries, median ms | After P1-P3 |
+| --- | --- | --- |
+| Catalogue page load (requests) | 26 requests, 130 q, 95-105 ms | 1 request, 5 q, 5 ms |
+| Catalogue in headless Chrome | 26 requests, 321-357 ms to table | 1 request, 113-130 ms |
+| `GET products/` page 1 / last page | 30 q, 13-15 / 22 ms | 5 q, 4-6 / 9-12 ms |
+| `GET products/<id>/editor/`, 2 variants | 10 q, 5-7 ms | 7 q, 4-6 ms |
+| `GET products/<id>/editor/`, 50 variants | 106 q, 40-56 ms | 7 q, 8 ms |
+| Open 50-variant product (editor + detail) | 110 q, 48-70 ms | 11 q, 11 ms |
 
-| Case | Baseline | After P1-P3 | Change |
-| --- | --- | --- | --- |
-| Catalogue page load (requests / queries) | 26 / 130 | 1 / 5 | −96% queries |
-| Catalogue page load, median ms (in-process) | 104.6 / 94.5 | 5.0 / 5.0 | ~20× |
-| Catalogue in headless Chrome: API requests, time to table | 26, 321-357 ms | 1, 113-130 ms | |
-| `GET products/` page 1 (queries, median ms) | 30, 12.7 / 15.4 | 5, 3.9 / 6.2 | |
-| `GET products/` last page (queries, median ms) | 30, 22.0 / 21.9 | 5, 8.9 / 11.5 | |
-| `GET products/<id>/editor/`, 2 variants | 10, 4.6 / 7.3 | 7, 5.7 / 4.2 | |
-| `GET products/<id>/editor/`, 50 variants | 106, 55.5 / 39.5 | 7, 8.4 / 8.1 | ~6× |
-| Open 50-variant product (editor + detail) | 110, 69.8 / 47.7 | 11, 11.4 / 11.5 | ~5× |
+Per step: [00 baseline](measurements/00-baseline.md),
+[01 P1](measurements/01-after-p1-catalogue-requests.md),
+[02 P2](measurements/02-after-p2-list-select-related.md),
+[03 P3](measurements/03-after-p3-editor-prefetch.md).
 
-Pairs of timings are run 1 / run 2. Per-step files:
-[00 baseline](measurements/00-baseline.md),
-[01 after P1](measurements/01-after-p1-catalogue-requests.md),
-[02 after P2](measurements/02-after-p2-list-select-related.md),
-[03 after P3](measurements/03-after-p3-editor-prefetch.md).
-
-**Responses unchanged.** Every endpoint hash in 01-03 equals the baseline hash. P1 removed
+**Responses unchanged.** Every endpoint hash after each fix equals the baseline. P1 removed
 requests rather than changing one, so I also compared list and detail output for the four
 fields the old loop overwrote, across all 5,000 products: 0 differences.
 
-**Reproduced from a clean clone.** On a fresh database built by the setup steps, checking out
-`0de517d` gave 30 / 106 / 130 queries with the baseline hashes, and `main` gave 5 / 7 / 11
-with the final hashes.
+**Reproduced from a clean clone.** On a fresh database built by the setup steps, `0de517d` gave
+30 / 106 / 130 queries with the baseline hashes, and `main` gave 5 / 7 / 11 with the final ones.
 
 ## 3. Implementation
 
-### Performance (commits `c577f7d`, `b7d21d2`, `773e4ae`)
+### Performance (`c577f7d`, `b7d21d2`, `773e4ae`)
 
-- **P1:** `CatalogueView.vue` renders the list response directly.
+- **P1:** the catalogue renders the list response directly.
 - **P2:** `.select_related("category")` on the list queryset.
-- **P3:** the editor loads variants with `select_related("inventory")` and
-  `Prefetch("price_rules", queryset=PriceRule.objects.order_by("id"))`, then builds the same
-  dictionary from memory. A variant with no inventory row still returns `null`.
-- **Regression guards:** `catalog/tests/test_query_counts.py` asserts 5 queries for the list
-  (full page and search) and 7 for the editor regardless of variant count. I confirmed each
-  test fails with the old code (30, 16, 8 and 18 queries).
+- **P3:** variants load with `select_related("inventory")` and
+  `Prefetch("price_rules", PriceRule.objects.order_by("id"))`; the response is built from
+  memory as before.
+- `tests/test_query_counts.py` pins the list at 5 queries and the editor at 7 for any variant
+  count. Each test fails on the old code.
 
-### Inventory adjustments (commits `2ed1dec`, `c380e4f`, `f508c8a`)
+### Inventory adjustments (`2ed1dec`, `c380e4f`, `f508c8a`)
 
 **API.** `POST /api/products/<product_id>/variants/<variant_id>/adjustments/?merchant_id=<id>`
-with `{"delta": -5, "reason": "Cycle count correction"}`.
+with `{"delta": -5, "reason": "Cycle count correction"}`. `GET` on the same URL lists the
+variant's adjustments, newest first, 25 per page.
 
 | Status | When |
 | --- | --- |
-| 201 | Created; body is the audit record (`id, variant, delta, reason, quantity_before, quantity_after, actor, created_at`) |
-| 400 | `delta` missing, zero, not a whole number or outside the INT range; `reason` missing, blank or over 255 characters; bad `merchant_id` |
-| 403 | Not signed in, or CSRF token missing |
-| 404 | Not a member of the merchant, or the variant is not in that product and merchant |
-| 409 | Would take stock below reserved (body includes current `quantity` and `reserved`), or the variant has no inventory row |
-| 405 | PUT, PATCH or DELETE: audit records are append-only |
+| 201 | Created; body is the audit record |
+| 400 | Delta missing, zero, not a whole number or out of INT range; reason missing, blank or over 255 characters |
+| 403 | Not signed in, or no CSRF token |
+| 404 | Not a member of the merchant, or the variant isn't in that product and merchant |
+| 409 | Would go below reserved (body has current `quantity` and `reserved`), or the variant has no inventory row |
+| 405 | PUT, PATCH, DELETE: the audit trail is append-only |
 
-`GET` on the same URL lists the variant's adjustments, newest first, 25 per page.
+**Data model.** New table `InventoryAdjustment` (migration `0004`): variant, actor, delta,
+reason, quantity before and after, created at. `PROTECT` foreign keys stop history being
+cascade-deleted, and CHECK constraints (`delta <> 0`, `after = before + delta`) reject a wrong
+audit row even from code that bypasses the service. I didn't reuse `AuditLog`: its actor is
+nullable and its details are free JSON, so the required fields couldn't be constrained.
 
-**Data model.** A new `InventoryAdjustment` table (migration `0004`): variant, actor, delta,
-reason, quantity before, quantity after, created at.
-- Both foreign keys are `PROTECT`, so history cannot be cascade-deleted.
-- Two CHECK constraints: `delta <> 0`, and `quantity_after = quantity_before + delta`. A
-  wrong audit row cannot be stored even by code that bypasses the service.
-- I chose a dedicated table over the existing `AuditLog` because `AuditLog` is product-level,
-  has a nullable actor and stores free-form JSON. None of the guaranteed fields could be
-  constrained or queried there.
-
-**The transaction** (`catalog/services.py`, `adjust_inventory`):
+**The transaction** (`catalog/services.py`):
 
 ```python
 with transaction.atomic():
@@ -143,153 +115,114 @@ with transaction.atomic():
     InventoryAdjustment.objects.create(...)
 ```
 
-Why this is correct on MySQL InnoDB:
-- `SELECT ... FOR UPDATE` takes an exclusive lock on the one inventory row through its unique
-  `variant_id` index. A second adjustment of the same variant waits until the first commits.
-- A locking read always returns the latest **committed** row, at any isolation level. The
-  waiting adjustment therefore starts from the first one's result, so no update is lost and
-  the floor check can never be stale.
-- The stock change and the audit insert share one transaction: both commit or neither does.
-- Each adjustment takes exactly one row lock, so adjustments cannot deadlock each other.
-- The reserved floor is enforced twice. The application check gives a clear 409, and the
-  existing `inventory_reservation_within_stock` CHECK constraint is the database backstop.
+Why it is correct on InnoDB:
+- `SELECT ... FOR UPDATE` locks the one inventory row; a second adjustment of the same variant
+  waits until the first commits.
+- A locking read returns the latest **committed** row at any isolation level, so the waiting
+  adjustment starts from the first one's result: no lost update, and the floor check is never
+  stale.
+- Stock change and audit insert share one transaction. One row lock per adjustment means no
+  deadlocks between adjustments.
+- The floor is enforced twice: the application check returns a clear 409, and the existing
+  `inventory_reservation_within_stock` constraint is the database backstop.
 
-**Authorization** reuses the existing mechanism: validate `?merchant_id=`, require membership
-(`Merchant.objects.filter(members=request.user)`), then look the variant up by
-`pk, product_id, product__merchant_id`. Anything outside the operator's merchant is a 404, as
-in the existing endpoints. Authorization runs before body validation, so errors never reveal
-details of another merchant's variant. The existing checks were duplicated inline in four
-views; I put the same code in one helper used by the new view and left the four views
-untouched (no drive-by refactor).
+**Authorization** reuses the existing mechanism (validate `?merchant_id=`, require membership),
+then looks the variant up by `pk`, `product_id` and `product__merchant_id`: anything outside the
+operator's merchant is a 404, as elsewhere. It runs before body validation, so errors reveal
+nothing about other merchants. I put the check in a helper for the new view and left the four
+existing views, which repeat it inline, untouched.
 
-**UI.** The editor's read-only Inventory tab became `components/InventoryPanel.vue`:
-- **Adjust** opens an inline form: signed whole-number change, required reason, and a live
-  "New quantity" preview that flags zero or below-reserved and disables Save. That is a hint
-  only; the server enforces the rules.
-- Success shows `stock 82 → 89` as a status message. Errors show the API message as an alert.
-- On a 409 the row refreshes to the server's current stock, so an operator working from a
-  stale page sees the real numbers.
-- **History** expands that variant's audit records with operator, change, before → after and
-  reason, paginated with the existing component.
-- The panel keeps its own copy of the rows. Replacing the editor's product record would have
-  discarded unsaved edits on the General tab.
+**UI** (`components/InventoryPanel.vue`, on the editor's Inventory tab):
+- **Adjust** opens an inline form with a live "New quantity" preview that flags zero or
+  below-reserved. Success and errors show as status and alert messages; on a 409 the row
+  refreshes to the server's current stock.
+- **History** lists the variant's adjustments and refreshes after each one.
+- The panel keeps its own copy of the rows, so adjusting never discards unsaved General-tab edits.
 
-**Rejected alternatives:**
-- *A single conditional `UPDATE ... WHERE quantity + delta >= reserved`*: also correct, but it
-  needs extra queries to report the before value and the reason for a refusal, and it doesn't
-  match the existing lock-then-write pattern in `ProductDetailView`.
-- *Optimistic version column*: a schema change and a retry loop for no benefit at this level
-  of contention.
-- *"Set quantity to X"*: two operators' counts would overwrite each other.
-- *`ATOMIC_REQUESTS` or SERIALIZABLE isolation*: a global behaviour change for one endpoint.
+**Alternatives I rejected:** a conditional `UPDATE ... WHERE quantity + delta >= reserved`
+(correct, but reporting before values and refusals needs extra queries, and it departs from
+the lock-then-write pattern in `ProductDetailView`); a version column (schema change and
+retries for no gain here); "set quantity to X" (concurrent counts overwrite each other);
+`ATOMIC_REQUESTS` or SERIALIZABLE (global change for one endpoint).
 
 ## 4. Correctness
 
-| Guarantee | How it holds | Tests (`backend/catalog/tests/`) |
+| Guarantee | How it holds | Evidence (`backend/catalog/tests/`) |
 | --- | --- | --- |
-| 1. Nonzero whole-number delta, required reason | Serializer validation + `delta <> 0` CHECK | `test_inventory_adjustment_api.py` `InventoryAdjustmentValidationTests`: 0, `"abc"`, 1.5, `"1.5"`, null, true, `""`, 2³¹, missing; reason `""`, `"   "`, null, 256 chars, missing |
-| 2. Never below reserved | Checked under the row lock; existing CHECK as backstop | Boundary (down to exactly reserved: 201; one more: 409); `test_concurrent_decrements_respect_reserved_floor` |
-| 3. Concurrent adjustments not lost | `select_for_update` on the inventory row | `test_inventory_adjustment_concurrency.py`: 8 simultaneous +1 → exactly +8 with a consistent before/after chain; a blocked adjustment reads the committed value |
-| 4. Accurate audit record | Written in the same transaction from the locked values; two CHECK constraints | Field-by-field assertions; DB rejects zero delta and inconsistent quantities |
-| 5. Both or neither | One `transaction.atomic()` | Audit insert failing (mocked) and rejected by MySQL itself (no mock): stock unchanged |
-| 6. Merchant isolation | Existing membership check + variant scoped by product and merchant | `test_inventory_adjustment_auth.py`: 14 cases incl. member of both merchants, mismatched product/variant, CSRF, methods |
-| 7. Usable from the existing UI | Inventory tab form and history | Headless Chrome against the dev stack (below) |
-| 8. Existing behaviour intact | No existing migration, constraint or view contract changed | All 46 original tests pass; all endpoint hashes unchanged |
+| 1. Nonzero whole number, required reason | Serializer + `delta <> 0` CHECK | `test_inventory_adjustment_api.py`, validation tests |
+| 2. Never below reserved | Checked under the lock; existing CHECK as backstop | Boundary tests; concurrent decrements |
+| 3. Concurrent changes not lost | `select_for_update` | `test_inventory_adjustment_concurrency.py` |
+| 4. Accurate audit record | Same transaction, locked values, two CHECKs | Field-by-field and constraint tests |
+| 5. Both or neither | One `transaction.atomic()` | Rollback tests: mocked failure, and MySQL rejecting the row |
+| 6. Merchant isolation | Existing membership check + variant scoped by product and merchant | `test_inventory_adjustment_auth.py` (14 cases) |
+| 7. Usable from the existing UI | Inventory tab | Browser checks below |
+| 8. Existing behavior intact | No existing migration, constraint or response changed | 46 original tests pass; hashes unchanged |
 
-**The concurrency tests use real, independent MySQL connections.** They are
-`TransactionTestCase` tests, which commit for real. Each worker thread gets its own Django
-connection, and therefore its own MySQL session. One test is fully deterministic: the main
-thread holds the row lock while a worker tries to adjust, and the test asserts the worker is
-still blocked, then that it read the committed value. The module was run 5 times in a row,
-and the full suite twice, without a failure.
+**Concurrency tests use real, independent MySQL connections:** `TransactionTestCase` (real
+commits) with one thread, and so one MySQL session, per worker. Eight simultaneous +1s give
+exactly +8; five −3s against 6 available units let exactly two through. A deterministic test
+holds the row lock and asserts the worker waits, then reads the committed value. The module
+passed 5 runs in a row.
 
-**The tests were checked against deliberately broken code.** I reran them with each safeguard
-removed, then restored it:
+**I checked the tests against deliberately broken code**, restoring it each time:
 
 | Safeguard removed | Result |
 | --- | --- |
-| `select_for_update()` | All 3 concurrency tests fail: 7 of 8 increments lost, all 5 decrements passed the floor |
-| Audit insert moved outside the transaction | Both rollback tests fail (stock committed without an audit row) |
-| Application floor check | Floor test fails with the database's `IntegrityError` (the data stays safe; the 409 comes from the application check) |
-| Merchant or product filter in the variant lookup | 3 and 2 authorization tests fail |
+| `select_for_update()` | 3 concurrency tests fail: 7 of 8 increments lost |
+| Audit insert outside the transaction | Both rollback tests fail |
+| Application floor check | Floor test fails with the DB's `IntegrityError` (data still safe) |
+| Merchant or product filter on the variant lookup | 3 and 2 auth tests fail |
 
-**Checked against the running app:**
-- **Browser** (headless Chrome against the dev stack): adjust up and down, a zero change, a
-  change below reserved, a blank reason (server 400 shown), and a stale form. In the stale-form
-  case, a second change committed after the form loaded: the UI showed 82, stock was 62, the
-  server returned 409, and the row refreshed to 62. History refreshed after each adjustment.
-- **`curl`:** no session (403), no CSRF token (403), non-member merchant, foreign variant and
-  mismatched product (404). The database was unchanged afterwards.
-- Every adjustment made during these checks is in the audit table with its reason.
+**Against the running app:** in headless Chrome I adjusted up and down and tried a zero change,
+a below-reserved change, a blank reason and a stale form (the 409 refreshed the row). With
+`curl`, missing session or CSRF token gave 403, and other merchants' or mismatched variants gave
+404 with nothing changed.
 
-## 5. Trade-offs, limitations and next steps
+## 5. Trade-offs and next steps
 
 **Assumptions**
-- DRF's `IntegerField` accepts `"5"` and `5.0` as the whole number 5. Fractions and text are
-  rejected.
-- Reason is free text up to 255 characters. Reason codes would help reporting but were not
-  asked for.
-- A variant with no inventory row returns 409 rather than creating one. All seeded variants
-  have a row, and creating one would need a different locking strategy.
-- 409 rather than 400 for the floor: the request is valid but conflicts with current stock,
-  and the right reaction is to refresh, not to fix the input.
+- `"5"` and `5.0` are accepted as the whole number 5 (DRF `IntegerField`); fractions and text
+  are rejected.
+- Reason is free text up to 255 characters.
+- A variant without an inventory row gets 409 rather than a new row; every seeded variant has one.
+- 409, not 400, for the floor: the request is valid but conflicts with current stock.
 
 **Limitations**
-- Adjustments show in the Inventory tab's History, **not** on the product Activity page,
-  because they live in their own table.
-- There is no idempotency key. The button is disabled while a request is in flight, but a
-  client retry after a lost response could apply twice.
-- A transaction that held the row lock indefinitely would make waiters fail after InnoDB's
-  50 s lock timeout with a 500.
-- `PROTECT` means a variant or user with adjustments cannot be deleted. Nothing in the app
-  deletes them today, and keeping audit history is the intent.
-- No frontend unit tests: the repository has no frontend test runner, and adding one was out
-  of budget. The UI was verified in a real browser and by `npm run build`.
-- Timings come from `runserver` with `DEBUG=True` on one machine. Query and request counts are
-  the portable evidence.
+- Adjustments appear in the Inventory tab's History, not on the product Activity page.
+- No idempotency key: Save is disabled while in flight, but a retry after a lost response
+  could apply twice.
+- A stuck lock holder makes waiters fail after InnoDB's 50 s lock timeout (500).
+- `PROTECT` blocks deleting a variant or user with adjustments, by design.
+- No frontend unit tests (no runner in the repo); I verified the UI in a browser.
+- Timings come from `runserver` with `DEBUG=True`; query and request counts are portable.
 
-**Next steps, in priority order**
-1. Show adjustments on the Activity page (merge the two feeds), or link to History from there.
-2. Add an idempotency key to the adjustment POST.
-3. P4: include `image_url` in the editor payload and drop the extra request.
-4. Add a `(variant_id, created_at)` index to adjustments and a `(product_id, created_at)` index
-   to `AuditLog` once history grows (P6).
-5. Move the merchant check duplicated in the four existing views into the new helper (a pure
-   refactor, covered by the existing tests).
-6. P5, P7: keyset pagination, and a search strategy chosen with product owners (prefix
-   matching can use an index; FULLTEXT changes matching semantics).
+**Next steps, in order:** show adjustments on the Activity page; add an idempotency key; P4;
+indexes on `(variant_id, created_at)` and `(product_id, created_at)` as history grows; move the
+four views' merchant check into the shared helper; then P5 and P7 (keyset pagination, and a
+search strategy agreed with product owners).
 
 ## Reproducing the results
 
-Setup is as in `README.md` (`./setup.sh`). Then:
+Set up with `./setup.sh` as in `README.md`, then:
 
 ```bash
-# One-off per backend container build: formatter tools (not needed for tests).
-docker compose exec backend python -m pip install -r requirements-dev.txt
-
-# Full test suite (MySQL), including the concurrency tests.
+# Tests (MySQL), including concurrency
 docker compose exec backend python manage.py test catalog --keepdb
-
-# Only the concurrency and atomicity tests, verbose.
 docker compose exec backend python manage.py test \
   catalog.tests.test_inventory_adjustment_concurrency --keepdb -v 2
 
-# Performance numbers for the current checkout.
+# Current numbers, then baseline numbers from the commit before any fix
 docker compose exec backend python manage.py measure_endpoints --runs 20
-
-# Baseline numbers: run the same command on the commit before any fix.
 git checkout 0de517d
 docker compose exec backend python manage.py measure_endpoints --runs 20
 git checkout main
+
+# Formatters (once per container build)
+docker compose exec backend python -m pip install -r requirements-dev.txt
 ```
 
-Compare query counts and body hashes with the files in `measurements/`. The seed is
-deterministic, so the hashes match on any machine. Timings will differ by machine.
-
-To see P1 in a browser, open the catalogue with DevTools → Network filtered to `/api/`, or
-watch `docker compose logs -f backend | grep /api/` while paging. One page load is one
-request; at `0de517d` it is 26.
-
-Note: the measurement command and browser checks use the existing seeded products. Making
-adjustments to ASSESS-000005 (2 variants) or ASSESS-000001 (50 variants) changes their editor
-response and therefore their hashes; adjust other products when experimenting.
+Compare query counts and hashes with `measurements/`. The seed is deterministic, so hashes
+match on any machine; timings won't. To see P1 in a browser, filter DevTools → Network by
+`/api/` (or run `docker compose logs -f backend | grep /api/`) while paging: 1 request per page
+now, 26 at `0de517d`. Avoid adjusting ASSESS-000001 and ASSESS-000005: the measurement uses
+them, and adjustments change their hashes.
