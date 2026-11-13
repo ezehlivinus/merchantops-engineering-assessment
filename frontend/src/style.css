@@ -364,6 +364,16 @@ textarea { resize: vertical; }
 }
 .form-footer button { margin-left: auto; }
 
+.adjust-feedback { padding: 0 1.5rem; }
+.adjust-feedback p { padding-bottom: 1rem; }
+.adjust-row { background: var(--soft); }
+.adjust-row td { color: inherit; }
+.adjust-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem 1rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+.adjust-fields .field input { width: 9rem; }
+.adjust-fields .adjust-reason { flex: 1 1 16rem; }
+.adjust-fields .adjust-reason input { width: 100%; }
+.adjust-preview { padding-bottom: 0.55rem; color: var(--muted); }
+
 .activity-table tbody th, .activity-table tbody td { vertical-align: top; }
 .activity-table time { white-space: nowrap; }
 .change-list { min-width: 11rem; }

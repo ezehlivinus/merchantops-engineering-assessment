@@ -147,6 +147,39 @@ class Availability(models.Model):
         ]
 
 
+class InventoryAdjustment(models.Model):
+    """Append-only record of one manual stock correction on a variant."""
+
+    # PROTECT: audit history must not disappear with the variant or user.
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, related_name="adjustments"
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="inventory_adjustments",
+    )
+    delta = models.IntegerField()
+    reason = models.CharField(max_length=255)
+    quantity_before = models.PositiveIntegerField()
+    quantity_after = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(delta=0),
+                name="inventory_adjustment_nonzero_delta",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    quantity_after=models.F("quantity_before") + models.F("delta")
+                ),
+                name="inventory_adjustment_consistent_quantities",
+            ),
+        ]
+
+
 class AuditLog(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="activity"

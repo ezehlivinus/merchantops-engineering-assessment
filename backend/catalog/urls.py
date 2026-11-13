@@ -1,6 +1,7 @@
 from django.urls import path
 
 from catalog.views import (
+    InventoryAdjustmentView,
     ProductActivityView,
     ProductDetailView,
     ProductEditorView,
@@ -27,5 +28,10 @@ urlpatterns = [
         "products/<int:pk>/activity/",
         ProductActivityView.as_view(),
         name="product-activity",
+    ),
+    path(
+        "products/<int:product_pk>/variants/<int:variant_pk>/adjustments/",
+        InventoryAdjustmentView.as_view(),
+        name="variant-adjustments",
     ),
 ]

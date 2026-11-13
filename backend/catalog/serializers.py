@@ -2,7 +2,7 @@ import re
 
 from rest_framework import serializers
 
-from catalog.models import AuditLog, Category, Product
+from catalog.models import AuditLog, Category, InventoryAdjustment, Product
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -107,5 +107,27 @@ class ProductActivitySerializer(serializers.ModelSerializer):
             "actor",
             "action",
             "details",
+            "created_at",
+        ]
+
+
+class InventoryAdjustmentRequestSerializer(serializers.Serializer):
+    delta = serializers.IntegerField()
+    reason = serializers.CharField(max_length=255)
+
+
+class InventoryAdjustmentSerializer(serializers.ModelSerializer):
+    actor = serializers.CharField(source="actor.username", read_only=True)
+
+    class Meta:
+        model = InventoryAdjustment
+        fields = [
+            "id",
+            "variant",
+            "delta",
+            "reason",
+            "quantity_before",
+            "quantity_after",
+            "actor",
             "created_at",
         ]

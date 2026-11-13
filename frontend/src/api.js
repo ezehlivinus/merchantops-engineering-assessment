@@ -33,7 +33,7 @@ function errorMessage(data, fallback) {
   }).join(' ') || fallback
 }
 
-async function request(path, { params, signal, body } = {}) {
+async function request(path, { params, signal, body, method } = {}) {
   const query = new URLSearchParams({ merchant_id: merchant.id, ...params })
   const headers = { Accept: 'application/json' }
   if (body) {
@@ -41,7 +41,7 @@ async function request(path, { params, signal, body } = {}) {
     headers['X-CSRFToken'] = csrfToken()
   }
   const response = await fetch('/api/products/' + path + '?' + query, {
-    method: body ? 'PATCH' : 'GET',
+    method: method || (body ? 'PATCH' : 'GET'),
     credentials: 'same-origin',
     signal,
     headers,
@@ -76,5 +76,8 @@ export const products = {
   },
   activity(id, page, signal) {
     return request(id + '/activity/', { params: { page }, signal })
+  },
+  adjustInventory(id, variantId, body) {
+    return request(id + '/variants/' + variantId + '/adjustments/', { method: 'POST', body })
   },
 }

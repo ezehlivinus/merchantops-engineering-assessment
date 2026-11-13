@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { productImagePattern, products } from '../api'
 import { catalogueQuery } from '../router'
 import { useResource } from '../useResource'
+import InventoryPanel from '../components/InventoryPanel.vue'
 import ProductThumbnail from '../components/ProductThumbnail.vue'
 import RequestState from '../components/RequestState.vue'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -230,24 +231,7 @@ async function save() {
     </section>
 
     <section v-show="tab === 'inventory'" id="panel-inventory" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-inventory" tabindex="0">
-      <h2 class="panel-heading">Variant inventory</h2>
-      <div v-if="product.variants.length" class="table-scroll">
-        <table class="data-table">
-          <thead>
-            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="variant in product.variants" :key="variant.id">
-              <th scope="row">{{ variant.name }}</th>
-              <td class="code">{{ variant.sku }}</td>
-              <td class="numeric">{{ variant.inventory?.quantity ?? '—' }}</td>
-              <td class="numeric">{{ variant.inventory?.reserved ?? '—' }}</td>
-              <td class="numeric">{{ variant.inventory ? variant.inventory.quantity - variant.inventory.reserved : '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-else class="request-state">No variants for this product.</p>
+      <InventoryPanel :product-id="id" :variants="product.variants" />
     </section>
 
     <section v-show="tab === 'availability'" id="panel-availability" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-availability" tabindex="0">
