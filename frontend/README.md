@@ -24,7 +24,11 @@ catalogue and editor use local WebP assets in `frontend/public/product-images/`
 when the saved path matches `/product-images/<file>.webp`. Both show the
 placeholder if the path is empty or the image fails to load.
 
-Pricing, inventory, and availability are read-only. Available inventory is
-calculated as quantity minus reservations for each variant.
+Pricing and availability are read-only. On the Inventory tab, each variant has
+**Adjust** (raise or lower stock by a nonzero whole number with a required
+reason; stock cannot go below the reserved quantity) and **History** (that
+variant's adjustments, newest first). Available inventory is calculated as
+quantity minus reservations for each variant. Inventory adjustments are not
+shown on the product Activity page.
 
 Build with `docker compose exec frontend npm run build`.
