@@ -112,8 +112,15 @@ class ProductActivitySerializer(serializers.ModelSerializer):
 
 
 class InventoryAdjustmentRequestSerializer(serializers.Serializer):
-    delta = serializers.IntegerField()
+    # Bounds match the signed INT column that stores delta.
+    delta = serializers.IntegerField(min_value=-(2**31 - 1), max_value=2**31 - 1)
+    # Surrounding whitespace is trimmed, so "   " counts as blank.
     reason = serializers.CharField(max_length=255)
+
+    def validate_delta(self, value):
+        if value == 0:
+            raise serializers.ValidationError("Must be a nonzero whole number.")
+        return value
 
 
 class InventoryAdjustmentSerializer(serializers.ModelSerializer):

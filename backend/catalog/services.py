@@ -3,6 +3,19 @@ from django.db import transaction
 from catalog.models import Inventory, InventoryAdjustment
 
 
+class InventoryMissing(Exception):
+    """The variant has no inventory record to adjust."""
+
+
+class InsufficientStock(Exception):
+    """The adjustment would take stock below the reserved quantity."""
+
+    def __init__(self, quantity, reserved):
+        super().__init__("Stock cannot fall below the reserved quantity.")
+        self.quantity = quantity
+        self.reserved = reserved
+
+
 def adjust_inventory(*, variant, actor, delta, reason):
     """Change a variant's stock by ``delta`` and record who did it and why.
 
@@ -14,10 +27,20 @@ def adjust_inventory(*, variant, actor, delta, reason):
     with transaction.atomic():
         # SELECT ... FOR UPDATE: blocks other writers to this row until we
         # commit, and always reads the latest committed quantity.
-        inventory = Inventory.objects.select_for_update().get(variant=variant)
+        try:
+            inventory = Inventory.objects.select_for_update().get(variant=variant)
+        except Inventory.DoesNotExist:
+            raise InventoryMissing()
 
         quantity_before = inventory.quantity
-        inventory.quantity = quantity_before + delta
+        quantity_after = quantity_before + delta
+
+        # Checked while holding the lock, so no concurrent change can make
+        # it stale. The CHECK constraint on Inventory is the backstop.
+        if quantity_after < inventory.reserved:
+            raise InsufficientStock(quantity_before, inventory.reserved)
+
+        inventory.quantity = quantity_after
         inventory.save(update_fields=["quantity"])
 
         return InventoryAdjustment.objects.create(
@@ -26,5 +49,5 @@ def adjust_inventory(*, variant, actor, delta, reason):
             delta=delta,
             reason=reason,
             quantity_before=quantity_before,
-            quantity_after=inventory.quantity,
+            quantity_after=quantity_after,
         )

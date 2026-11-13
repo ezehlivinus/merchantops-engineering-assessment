@@ -55,7 +55,10 @@ async function request(path, { params, signal, body, method } = {}) {
       signIn()
       throw new Error('Sign in to continue.')
     }
-    throw new Error(errorMessage(data, 'Request failed (' + response.status + '). Please try again.'))
+    const failure = new Error(errorMessage(data, 'Request failed (' + response.status + '). Please try again.'))
+    failure.status = response.status
+    failure.data = data
+    throw failure
   }
   if (data === null) throw new Error('The server returned an invalid response. Please try again.')
   return data

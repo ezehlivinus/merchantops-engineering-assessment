@@ -25,6 +25,14 @@ const newQuantity = computed(() => {
   if (!editingRow.value || !Number.isInteger(delta.value)) return null
   return editingRow.value.inventory.quantity + delta.value
 })
+// Client-side hint only; the server enforces both rules.
+const problem = computed(() => {
+  if (delta.value === 0) return 'Enter a nonzero whole number.'
+  if (newQuantity.value !== null && newQuantity.value < editingRow.value.inventory.reserved) {
+    return `Below the ${editingRow.value.inventory.reserved} reserved units.`
+  }
+  return ''
+})
 
 async function open(row) {
   editing.value = row.id
@@ -55,6 +63,11 @@ async function submit(row) {
     }
     editing.value = null
   } catch (failure) {
+    // A 409 carries the current stock: show it so the operator can retry.
+    if (failure.status === 409 && Number.isInteger(failure.data?.quantity)) {
+      row.inventory.quantity = failure.data.quantity
+      row.inventory.reserved = failure.data.reserved
+    }
     feedback.value = { ok: false, text: failure.message }
   } finally {
     submitting.value = false
@@ -104,9 +117,10 @@ async function submit(row) {
                   </label>
                   <p class="adjust-preview" aria-live="polite">
                     New quantity: <strong>{{ newQuantity ?? '—' }}</strong>
+                    <span v-if="problem" class="error-text"> · {{ problem }}</span>
                   </p>
                   <button class="button" type="button" @click="close">Cancel</button>
-                  <button class="button button-primary" type="submit">{{ submitting ? 'Saving…' : 'Save adjustment' }}</button>
+                  <button class="button button-primary" type="submit" :disabled="!!problem">{{ submitting ? 'Saving…' : 'Save adjustment' }}</button>
                 </fieldset>
               </form>
             </td>

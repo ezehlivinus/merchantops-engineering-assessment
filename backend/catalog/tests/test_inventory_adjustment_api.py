@@ -170,3 +170,68 @@ class InventoryAdjustmentConstraintTests(InventoryAdjustmentFixtureMixin, TestCa
         )
 
         self.assertIsNotNone(adjustment.pk)
+
+
+class InventoryAdjustmentValidationTests(InventoryAdjustmentFixtureMixin, TestCase):
+    """Rejected requests return an error and change nothing."""
+
+    def assert_rejected(self, data, status_code=400, field=None):
+        response = self.adjust(data)
+
+        self.assertEqual(response.status_code, status_code, response.data)
+        if field:
+            self.assertIn(field, response.data)
+        self.assertEqual(self.quantity(), 20)
+        self.assertFalse(InventoryAdjustment.objects.exists())
+        return response
+
+    def test_invalid_deltas_are_rejected(self):
+        for delta in (0, "abc", 1.5, "1.5", None, True, "", 2**31):
+            with self.subTest(delta=delta):
+                self.assert_rejected({"delta": delta, "reason": "Count"}, field="delta")
+
+    def test_missing_delta_is_rejected(self):
+        self.assert_rejected({"reason": "Count"}, field="delta")
+
+    def test_zero_delta_message(self):
+        response = self.assert_rejected({"delta": 0, "reason": "Count"})
+
+        self.assertEqual(response.data["delta"], ["Must be a nonzero whole number."])
+
+    def test_invalid_reasons_are_rejected(self):
+        for reason in ("", "   ", None, "x" * 256):
+            with self.subTest(reason=reason):
+                self.assert_rejected({"delta": 1, "reason": reason}, field="reason")
+
+    def test_missing_reason_is_rejected(self):
+        self.assert_rejected({"delta": 1}, field="reason")
+
+    def test_reason_is_trimmed_and_may_use_full_length(self):
+        response = self.adjust({"delta": 1, "reason": "  " + "x" * 255 + "  "})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(InventoryAdjustment.objects.get().reason, "x" * 255)
+
+    def test_adjusting_down_to_reserved_is_allowed(self):
+        response = self.adjust({"delta": -15, "reason": "Count"})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.quantity(), 5)
+
+    def test_adjusting_below_reserved_is_a_conflict(self):
+        response = self.assert_rejected({"delta": -16, "reason": "Count"}, 409)
+
+        self.assertEqual(response.data["quantity"], 20)
+        self.assertEqual(response.data["reserved"], 5)
+        self.assertIn("at most 15 can be removed", response.data["detail"])
+
+    def test_variant_without_inventory_is_a_conflict(self):
+        variant = ProductVariant.objects.create(
+            product=self.product, sku="STOCK-001-NOINV", name="No inventory"
+        )
+
+        response = self.adjust({"delta": 1, "reason": "Count"}, variant=variant)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(InventoryAdjustment.objects.exists())
+        self.assertFalse(Inventory.objects.filter(variant=variant).exists())

@@ -22,7 +22,7 @@ from catalog.serializers import (
     ProductListSerializer,
     ProductUpdateSerializer,
 )
-from catalog.services import adjust_inventory
+from catalog.services import InsufficientStock, InventoryMissing, adjust_inventory
 
 
 class ProductPagination(PageNumberPagination):
@@ -329,12 +329,33 @@ class InventoryAdjustmentView(APIView):
         serializer = InventoryAdjustmentRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        adjustment = adjust_inventory(
-            variant=variant,
-            actor=request.user,
-            delta=serializer.validated_data["delta"],
-            reason=serializer.validated_data["reason"],
-        )
+        # 409: the request is valid but conflicts with the current stock.
+        try:
+            adjustment = adjust_inventory(
+                variant=variant,
+                actor=request.user,
+                delta=serializer.validated_data["delta"],
+                reason=serializer.validated_data["reason"],
+            )
+        except InsufficientStock as error:
+            available = error.quantity - error.reserved
+            return Response(
+                {
+                    "detail": (
+                        f"Stock cannot fall below the reserved quantity. "
+                        f"{error.reserved} of {error.quantity} are reserved, "
+                        f"so at most {available} can be removed."
+                    ),
+                    "quantity": error.quantity,
+                    "reserved": error.reserved,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except InventoryMissing:
+            return Response(
+                {"detail": "This variant has no inventory record to adjust."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         return Response(
             InventoryAdjustmentSerializer(adjustment).data,
