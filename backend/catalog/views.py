@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 from rest_framework.exceptions import ValidationError
@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 from catalog.models import (
     AuditLog,
     Availability,
-    Inventory,
     Merchant,
     PriceRule,
     Product,
@@ -96,8 +95,15 @@ class ProductEditorView(APIView):
             merchant_id=merchant_id,
         )
 
+        # Load inventory (joined) and prices (one extra query) for all
+        # variants up front, instead of two queries per variant.
         variants = list(
-            ProductVariant.objects.filter(product_id=product.pk).order_by("id")
+            ProductVariant.objects.filter(product_id=product.pk)
+            .select_related("inventory")
+            .prefetch_related(
+                Prefetch("price_rules", queryset=PriceRule.objects.order_by("id"))
+            )
+            .order_by("id")
         )
 
         prices_by_variant = {}
@@ -110,12 +116,12 @@ class ProductEditorView(APIView):
                     "tier": price.tier,
                     "amount": f"{price.amount:.2f}",
                 }
-                for price in PriceRule.objects.filter(variant_id=variant.pk).order_by(
-                    "id"
-                )
+                for price in variant.price_rules.all()
             ]
 
-            inventory = Inventory.objects.filter(variant_id=variant.pk).first()
+            # A variant may have no inventory row; the reverse one-to-one
+            # accessor raises in that case, so fall back to None.
+            inventory = getattr(variant, "inventory", None)
 
             inventory_by_variant[variant.pk] = (
                 {
