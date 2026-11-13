@@ -208,6 +208,17 @@ If setup did not finish, rerun:
 
 An existing demo operator retains its original password. If you forgot your locally chosen password, use appropriate Django user-management commands within the backend container rather than assuming a default password.
 
+## Submission notes
+
+See **[ENGINEERING_REPORT.md](ENGINEERING_REPORT.md)** for findings, before-and-after
+measurements, the inventory-adjustment design and how it was verified. Its last section,
+"Reproducing the results", lists the extra commands. Raw measurement output is in
+[`measurements/`](measurements/), and the measurement command is:
+
+```bash
+docker compose exec backend python manage.py measure_endpoints --runs 20
+```
+
 ## Your assignment
 
 Read **[ASSESSMENT.md](ASSESSMENT.md)** before implementing changes. Include **`ENGINEERING_REPORT.md`** with your completed submission.
